@@ -81,6 +81,33 @@ def pitch(speed="normal"):
 # 投球モーションでボールを離す瞬間に pitch() を呼ぶ
 ```
 
+### 💡 G1実装メモ（SDK調査結果 2026-06-30）
+**結論：G1 SDKに「モーション完了の通知機能」は無い。でも要らない。**
+自前で投球モーションを組むなら、制御スクリプトが"ボールを離す時刻"を知っているので、
+その瞬間に `/pitch` を叩くのが一番シンプルで正確（ミリ秒単位）。
+
+- **推奨＝自前アーム軌道（`rt/arm_sdk`, 約50Hzの制御ループ）**に埋め込む。
+  ループ内で release フェーズに達したら**1回だけ**HTTPを発火（制御周期を乱さないよう別スレッドで）：
+  ```python
+  import threading, urllib.request, json
+  def fire_pitch(speed="normal"):
+      d = json.dumps({"speed": speed}).encode()
+      req = urllib.request.Request("http://YOUR_SERVER_IP:3457/pitch", data=d,
+                                   headers={"Content-Type": "application/json"})
+      urllib.request.urlopen(req, timeout=3)
+  # 50Hz制御ループ内
+  if ratio >= 0.95 and not pitched:        # ボールを離すフェーズ
+      threading.Thread(target=fire_pitch, daemon=True).start()
+      pitched = True
+  ```
+- **プリセット動作（`G1ArmActionClient.ExecuteAction`）を使う場合**：完了コールバックが無く
+  fire-and-forget（公式サンプルも `time.sleep()` で代用）。→ 動作開始から推定秒数後に叩く＝精度は落ちる。
+- **補強したいなら**：状態トピック `rt/lowstate` を購読すれば全関節角をリアルタイム取得できるので、
+  「終端ポーズ到達」を自前判定して叩くことも可能。
+- SDK＝`unitree_sdk2`(C++) / `unitree_sdk2_python`（CycloneDDS）。
+  参考：unitree_sdk2_python の `example/g1/high_level/g1_arm7_sdk_dds_example.py`、
+  DeepWiki "G1 Humanoid Robot SDK"。
+
 ---
 
 ## 補助エンドポイント（デバッグ用）
